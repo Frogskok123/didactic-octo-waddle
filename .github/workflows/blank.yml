@@ -1,36 +1,83 @@
-# This is a basic workflow to help you get started with Actions
+name: Build rwProcMem33 (test)
 
-name: CI
-
-# Controls when the workflow will run
-on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
+on: 
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
-        run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+    - name: Install tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu libelf-dev bc bison flex libssl-dev git
+    
+    - name: Clone rwProcMem33
+      run: |
+        git clone https://github.com/abcz316/rwProcMem33.git
+        cd rwProcMem33
+        echo "=== rwProcMem33 structure ==="
+        ls -la
+        ls -la driver/
+    
+    - name: Download kernel
+      run: |
+        git clone --depth=1 --branch android12-5.10-lts \
+          https://android.googlesource.com/kernel/common kernel
+    
+    - name: Configure kernel
+      run: |
+        cd kernel
+        
+        # Твоя версия kernel
+        sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 136/' Makefile
+        sed -i 's|^EXTRAVERSION =.*|EXTRAVERSION = -android12-9-00020-gc9f59ef34367-ab9585114|' Makefile
+        echo "" > .scmversion
+        
+        echo "=== Kernel version ==="
+        make kernelversion
+        
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
+    
+    - name: Build rwProcMem33 driver
+      run: |
+        KERNEL_DIR=$(pwd)/kernel
+        MODULE_DIR=$(pwd)/rwProcMem33/driver
+        
+        cd "$KERNEL_DIR"
+        
+        echo "=== Building rwProcMem33 ==="
+        make -C "$KERNEL_DIR" M="$MODULE_DIR" \
+          ARCH=arm64 \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          modules -j$(nproc)
+        
+        echo "=== Stripping debug symbols ==="
+        aarch64-linux-gnu-strip --strip-debug "$MODULE_DIR"/*.ko
+        
+        echo "=== Build result ==="
+        ls -lh "$MODULE_DIR"/*.ko
+    
+    - name: Verify rwProcMem33 module
+      run: |
+        MODULE_DIR=$(pwd)/rwProcMem33/driver
+        
+        echo "=== Module info ==="
+        modinfo "$MODULE_DIR"/*.ko
+        
+        echo ""
+        echo "=== Vermagic check ==="
+        modinfo "$MODULE_DIR"/*.ko | grep vermagic
+    
+    - name: Copy module to root
+      run: |
+        cp rwProcMem33/driver/*.ko ./
+        ls -lh *.ko
+    
+    - uses: actions/upload-artifact@v4
+      with:
+        name: rwProcMem33-driver
+        path: "*.ko"
