@@ -18,9 +18,15 @@ jobs:
       run: |
         git clone https://github.com/abcz316/rwProcMem33.git
         cd rwProcMem33
-        echo "=== rwProcMem33 structure ==="
+        
+        echo "=== Structure ==="
         ls -la
-        ls -la driver/
+        
+        echo "=== rwProcMem33Module contents ==="
+        ls -la rwProcMem33Module/
+        
+        echo "=== Driver source ==="
+        ls -la rwProcMem33Module/driver/
     
     - name: Download kernel
       run: |
@@ -30,14 +36,9 @@ jobs:
     - name: Configure kernel
       run: |
         cd kernel
-        
-        # Твоя версия kernel
         sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 136/' Makefile
         sed -i 's|^EXTRAVERSION =.*|EXTRAVERSION = -android12-9-00020-gc9f59ef34367-ab9585114|' Makefile
         echo "" > .scmversion
-        
-        echo "=== Kernel version ==="
-        make kernelversion
         
         make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
         make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
@@ -45,39 +46,46 @@ jobs:
     - name: Build rwProcMem33 driver
       run: |
         KERNEL_DIR=$(pwd)/kernel
-        MODULE_DIR=$(pwd)/rwProcMem33/driver
+        MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/driver
+        
+        echo "=== Checking Makefile ==="
+        cat "$MODULE_DIR/Makefile"
         
         cd "$KERNEL_DIR"
         
-        echo "=== Building rwProcMem33 ==="
+        echo "=== Building ==="
         make -C "$KERNEL_DIR" M="$MODULE_DIR" \
           ARCH=arm64 \
           CROSS_COMPILE=aarch64-linux-gnu- \
           modules -j$(nproc)
         
-        echo "=== Stripping debug symbols ==="
+        echo "=== Strip ==="
         aarch64-linux-gnu-strip --strip-debug "$MODULE_DIR"/*.ko
         
-        echo "=== Build result ==="
+        echo "=== Result ==="
         ls -lh "$MODULE_DIR"/*.ko
     
-    - name: Verify rwProcMem33 module
+    - name: Verify module
       run: |
-        MODULE_DIR=$(pwd)/rwProcMem33/driver
+        MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/driver
         
         echo "=== Module info ==="
         modinfo "$MODULE_DIR"/*.ko
         
         echo ""
-        echo "=== Vermagic check ==="
+        echo "=== Vermagic ==="
         modinfo "$MODULE_DIR"/*.ko | grep vermagic
+        
+        echo ""
+        echo "=== Expected ==="
+        echo "5.10.136-android12-9-00020-gc9f59ef34367-ab9585114 SMP preempt mod_unload modversions aarch64"
     
-    - name: Copy module to root
+    - name: Copy to root
       run: |
-        cp rwProcMem33/driver/*.ko ./
+        cp rwProcMem33/rwProcMem33Module/driver/*.ko ./
         ls -lh *.ko
     
     - uses: actions/upload-artifact@v4
       with:
-        name: rwProcMem33-driver
+        name: rwProcMem33-test
         path: "*.ko"
