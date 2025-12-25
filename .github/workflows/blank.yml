@@ -1,4 +1,5 @@
-name: Build rwProcMem33 (patched)
+
+name: Build rwProcMem33 (force patch)
 
 on: 
   push:
@@ -18,24 +19,30 @@ jobs:
       run: |
         git clone https://github.com/abcz316/rwProcMem33.git
     
-    - name: Patch rwProcMem33 for kernel 5.10
+    - name: Force patch for kernel 5.10
       run: |
         cd rwProcMem33/rwProcMem33Module/rwProcMem_module
         
-        echo "=== Patching pte_mkwrite ==="
-        sed -i 's/pte_mkwrite(pte, \\&vma)/pte_mkwrite(pte)/g' linux_kernel_api.h
+        echo "=== Original pte_mkwrite line ==="
+        grep -n "pte_mkwrite" linux_kernel_api.h || echo "Not found"
         
-        echo "=== Patching VMA iterator ==="
-        sed -i '/VMA_ITERATOR/d' proc_maps_auto_offset.h
-        sed -i 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps_auto_offset.h
+        echo "=== Patching with perl ==="
+        perl -i -pe 's/pte_mkwrite(pte,s*&vma)/pte_mkwrite(pte)/g' linux_kernel_api.h
         
-        sed -i '/VMA_ITERATOR/d' proc_maps.h
-        sed -i 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps.h
+        echo "=== After patch ==="
+        grep -n "pte_mkwrite" linux_kernel_api.h
+        
+        echo "=== Patching anon_vma_name ==="
+        perl -i -pe 's/anon_name->name/"anon"/g' proc_maps.h
+        
+        echo "=== Patching VMA ==="
+        perl -i -pe 's/VMA_ITERATOR.*//g' proc_maps_auto_offset.h proc_maps.h
+        perl -i -pe 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps_auto_offset.h proc_maps.h
         
         echo "=== Patching filldir ==="
-        sed -i 's/bool my_filldir/int my_filldir/g' hide_procfs_dir.h
-        sed -i 's/return true;/return 0;/g' hide_procfs_dir.h
-        sed -i 's/return false;/return 1;/g' hide_procfs_dir.h
+        perl -i -pe 's/bool my_filldir/int my_filldir/g' hide_procfs_dir.h
+        perl -i -pe 's/return true;/return 0;/g' hide_procfs_dir.h
+        perl -i -pe 's/return false;/return 1;/g' hide_procfs_dir.h
     
     - name: Download kernel
       run: |
@@ -62,23 +69,20 @@ jobs:
           ARCH=arm64 \
           CROSS_COMPILE=aarch64-linux-gnu- \
           EXTRA_CFLAGS="-w" \
-          modules -j$(nproc) 2>&1 | tee build.log || true
+          modules -j$(nproc) 2>&1 || true
         
-        echo "=== Checking build result ==="
         if [ -f "$MODULE_DIR"/*.ko ]; then
-          echo "✅ Build successful"
+          echo "✅ Success"
           aarch64-linux-gnu-strip --strip-debug "$MODULE_DIR"/*.ko
           ls -lh "$MODULE_DIR"/*.ko
         else
-          echo "❌ Build failed"
-          tail -50 build.log
+          echo "❌ Failed"
           exit 1
         fi
     
     - name: Info
       run: |
-        MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/rwProcMem_module
-        modinfo "$MODULE_DIR"/*.ko
+        modinfo rwProcMem33/rwProcMem33Module/rwProcMem_module/*.ko
     
     - name: Copy
       run: |
