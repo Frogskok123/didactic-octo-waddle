@@ -1,4 +1,5 @@
-name: Build rwProcMem33 (test)
+
+name: Build rwProcMem33 (patched for 5.10)
 
 on: 
   push:
@@ -17,9 +18,51 @@ jobs:
     - name: Clone rwProcMem33
       run: |
         git clone https://github.com/abcz316/rwProcMem33.git
+    
+    - name: Patch rwProcMem33 for kernel 5.10
+      run: |
+        cd rwProcMem33/rwProcMem33Module/rwProcMem_module
         
-        echo "=== Driver location ==="
-        ls -la rwProcMem33/rwProcMem33Module/rwProcMem_module/
+        echo "=== Patching linux_kernel_api.h ==="
+        # Исправляем pte_mkwrite (kernel 5.10 требует 1 аргумент)
+        sed -i 's/pte_mkwrite(pte, &vma)/pte_mkwrite(pte)/g' linux_kernel_api.h
+        
+        echo "=== Patching proc_maps_auto_offset.h ==="
+        # Убираем VMA_ITERATOR и for_each_vma (нет в 5.10)
+        sed -i '/VMA_ITERATOR/d' proc_maps_auto_offset.h
+        sed -i 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps_auto_offset.h
+        
+        echo "=== Patching proc_maps.h ==="
+        sed -i '/VMA_ITERATOR/d' proc_maps.h
+        sed -i 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps.h
+        
+        echo "=== Patching hide_procfs_dir.h ==="
+        # Исправляем filldir_t
+        sed -i 's/bool my_filldir/int my_filldir/g' hide_procfs_dir.h
+        sed -i 's/return true/return 0/g' hide_procfs_dir.h
+        sed -i 's/return false/return 1/g' hide_procfs_dir.h
+        
+        echo "=== Patching Makefile (disable warnings) ==="
+        # Добавляем -w для игнорирования всех warnings
+        cat > Makefile << 'EOF'
+MODULE_NAME := rwProcMem33
+RESMAN_CORE_OBJS := rwProcMem_module.o
+
+ccflags-y += -w
+
+ifneq ($(KERNELRELEASE),)
+\tobj-m := $(MODULE_NAME).o
+\t$(MODULE_NAME)-objs := $(RESMAN_CORE_OBJS)
+else
+\tKDIR := /lib/modules/$(shell uname -r)/build
+\t
+all:
+\tmake -C $(KDIR) M=$(PWD) modules
+
+clean:
+\trm -rf *.ko *.o *.mod .*.*.cmd *.mod.o *.mod.c *.symvers *.order .tmp_versions
+endif
+EOF
     
     - name: Download kernel
       run: |
@@ -36,17 +79,6 @@ jobs:
         make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
         make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
     
-    - name: Show rwProcMem Makefile
-      run: |
-        MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/rwProcMem_module
-        
-        echo "=== Their Makefile (learn from this!) ==="
-        cat "$MODULE_DIR/Makefile"
-        
-        echo ""
-        echo "=== Source files ==="
-        ls -la "$MODULE_DIR"/*.c "$MODULE_DIR"/*.h 2>/dev/null || true
-    
     - name: Build rwProcMem33
       run: |
         KERNEL_DIR=$(pwd)/kernel
@@ -56,24 +88,22 @@ jobs:
         make -C "$KERNEL_DIR" M="$MODULE_DIR" \
           ARCH=arm64 \
           CROSS_COMPILE=aarch64-linux-gnu- \
-          modules -j$(nproc)
+          EXTRA_CFLAGS="-w" \
+          modules -j$(nproc) || echo "Build completed with warnings"
         
-        aarch64-linux-gnu-strip --strip-debug "$MODULE_DIR"/*.ko
-        
-        echo "=== Build result ==="
-        ls -lh "$MODULE_DIR"/*.ko
+        if [ -f "$MODULE_DIR"/*.ko ]; then
+          aarch64-linux-gnu-strip --strip-debug "$MODULE_DIR"/*.ko
+          echo "✅ Module built successfully!"
+          ls -lh "$MODULE_DIR"/*.ko
+        else
+          echo "❌ Module build failed!"
+          exit 1
+        fi
     
     - name: Verify
       run: |
         MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/rwProcMem_module
-        
-        echo "=== Module info ==="
         modinfo "$MODULE_DIR"/*.ko
-        
-        echo ""
-        echo "=== Vermagic comparison ==="
-        echo "Module  : $(modinfo "$MODULE_DIR"/*.ko | grep vermagic | sed 's/vermagic: *//')"
-        echo "Expected: 5.10.136-android12-9-00020-gc9f59ef34367-ab9585114 SMP preempt mod_unload modversions aarch64"
     
     - name: Copy module
       run: |
@@ -82,5 +112,5 @@ jobs:
     
     - uses: actions/upload-artifact@v4
       with:
-        name: rwProcMem33-driver
+        name: rwProcMem33-patched
         path: "*.ko"
