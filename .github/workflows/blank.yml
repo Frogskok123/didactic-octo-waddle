@@ -1,5 +1,4 @@
-
-name: Build rwProcMem33 (patched for 5.10)
+name: Build rwProcMem33 (patched)
 
 on: 
   push:
@@ -23,46 +22,20 @@ jobs:
       run: |
         cd rwProcMem33/rwProcMem33Module/rwProcMem_module
         
-        echo "=== Patching linux_kernel_api.h ==="
-        # Исправляем pte_mkwrite (kernel 5.10 требует 1 аргумент)
-        sed -i 's/pte_mkwrite(pte, &vma)/pte_mkwrite(pte)/g' linux_kernel_api.h
+        echo "=== Patching pte_mkwrite ==="
+        sed -i 's/pte_mkwrite(pte, \\&vma)/pte_mkwrite(pte)/g' linux_kernel_api.h
         
-        echo "=== Patching proc_maps_auto_offset.h ==="
-        # Убираем VMA_ITERATOR и for_each_vma (нет в 5.10)
+        echo "=== Patching VMA iterator ==="
         sed -i '/VMA_ITERATOR/d' proc_maps_auto_offset.h
         sed -i 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps_auto_offset.h
         
-        echo "=== Patching proc_maps.h ==="
         sed -i '/VMA_ITERATOR/d' proc_maps.h
         sed -i 's/for_each_vma(iter, vma)/for (vma = mm->mmap; vma; vma = vma->vm_next)/g' proc_maps.h
         
-        echo "=== Patching hide_procfs_dir.h ==="
-        # Исправляем filldir_t
+        echo "=== Patching filldir ==="
         sed -i 's/bool my_filldir/int my_filldir/g' hide_procfs_dir.h
-        sed -i 's/return true/return 0/g' hide_procfs_dir.h
-        sed -i 's/return false/return 1/g' hide_procfs_dir.h
-        
-        echo "=== Patching Makefile (disable warnings) ==="
-        # Добавляем -w для игнорирования всех warnings
-        cat > Makefile << 'EOF'
-MODULE_NAME := rwProcMem33
-RESMAN_CORE_OBJS := rwProcMem_module.o
-
-ccflags-y += -w
-
-ifneq ($(KERNELRELEASE),)
-\tobj-m := $(MODULE_NAME).o
-\t$(MODULE_NAME)-objs := $(RESMAN_CORE_OBJS)
-else
-\tKDIR := /lib/modules/$(shell uname -r)/build
-\t
-all:
-\tmake -C $(KDIR) M=$(PWD) modules
-
-clean:
-\trm -rf *.ko *.o *.mod .*.*.cmd *.mod.o *.mod.c *.symvers *.order .tmp_versions
-endif
-EOF
+        sed -i 's/return true;/return 0;/g' hide_procfs_dir.h
+        sed -i 's/return false;/return 1;/g' hide_procfs_dir.h
     
     - name: Download kernel
       run: |
@@ -79,7 +52,7 @@ EOF
         make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
         make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
     
-    - name: Build rwProcMem33
+    - name: Build
       run: |
         KERNEL_DIR=$(pwd)/kernel
         MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/rwProcMem_module
@@ -89,28 +62,29 @@ EOF
           ARCH=arm64 \
           CROSS_COMPILE=aarch64-linux-gnu- \
           EXTRA_CFLAGS="-w" \
-          modules -j$(nproc) || echo "Build completed with warnings"
+          modules -j$(nproc) 2>&1 | tee build.log || true
         
+        echo "=== Checking build result ==="
         if [ -f "$MODULE_DIR"/*.ko ]; then
+          echo "✅ Build successful"
           aarch64-linux-gnu-strip --strip-debug "$MODULE_DIR"/*.ko
-          echo "✅ Module built successfully!"
           ls -lh "$MODULE_DIR"/*.ko
         else
-          echo "❌ Module build failed!"
+          echo "❌ Build failed"
+          tail -50 build.log
           exit 1
         fi
     
-    - name: Verify
+    - name: Info
       run: |
         MODULE_DIR=$(pwd)/rwProcMem33/rwProcMem33Module/rwProcMem_module
         modinfo "$MODULE_DIR"/*.ko
     
-    - name: Copy module
+    - name: Copy
       run: |
         cp rwProcMem33/rwProcMem33Module/rwProcMem_module/*.ko ./
-        ls -lh *.ko
     
     - uses: actions/upload-artifact@v4
       with:
-        name: rwProcMem33-patched
+        name: rwProcMem33
         path: "*.ko"
